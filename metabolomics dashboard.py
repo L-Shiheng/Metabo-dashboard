@@ -17,27 +17,41 @@ from statsmodels.stats.multitest import multipletests
 try:
     from data_preprocessing import data_cleaning_pipeline
 except ImportError:
-    st.error("❌ 错误：未找到 'data_preprocessing.py'。请确保该文件在同一目录下。")
+    st.error("❌ 严重错误：未找到 'data_preprocessing.py'。请确保该文件在同一目录下。")
     st.stop()
 
 # ==========================================
-# 1. 全局配置
+# 1. 全局配置与样式
 # ==========================================
-st.set_page_config(page_title="MetaboAnalyst Pro (Multi-Group)", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="MetaboAnalyst Pro", page_icon="🧬", layout="wide")
 
 st.markdown("""
 <style>
+    /* 调整顶部留白 */
     .block-container {padding-top: 2rem !important; padding-bottom: 3rem !important;}
-    h1, h2, h3 {font-family: 'Arial', sans-serif; color: #2c3e50;}
-    button[data-baseweb="tab"] {font-size: 16px; font-weight: bold; padding: 10px 15px;}
-    .stMultiSelect [data-baseweb="tag"] {background-color: #f0f2f6;}
+    
+    /* 全局字体优化 */
+    h1, h2, h3, div, p {font-family: 'Arial', sans-serif; color: #2c3e50;}
+    
+    /* Tab 样式增强 */
+    button[data-baseweb="tab"] {
+        font-size: 16px; 
+        font-weight: bold; 
+        padding: 10px 15px;
+        background-color: white;
+        border-radius: 5px 5px 0 0;
+    }
+    
+    /* 多选框 Tag 样式 */
+    .stMultiSelect [data-baseweb="tag"] {background-color: #e3e8ee;}
 </style>
 """, unsafe_allow_html=True)
 
-COLOR_PALETTE = {'Up': '#CD0000', 'Down': '#00008B', 'NS': '#E0E0E0'}
+# 配色方案
+COLOR_PALETTE = {'Up': '#CD0000', 'Down': '#00008B', 'NS': '#E0E0E0'} # 红/深蓝/灰
 GROUP_COLORS = ['#E64B35', '#4DBBD5', '#00A087', '#3C5488', '#F39B7F', '#8491B4', '#91D1C2', '#DC0000', '#7E6148', '#B09C85']
 
-# 通用绘图布局 (修复图例遮挡问题)
+# --- 通用绘图布局 (Publication Ready) ---
 def update_layout_square(fig, title="", x_title="", y_title="", width=600, height=600):
     fig.update_layout(
         template="simple_white",
@@ -59,16 +73,18 @@ def update_layout_square(fig, title="", x_title="", y_title="", width=600, heigh
             automargin=True
         ),
         legend=dict(
-            yanchor="top", y=1,      # 图例顶部对齐
-            xanchor="left", x=1.02,  # 关键修改：x > 1 把图例移到框外
-            bordercolor="Black", borderwidth=0, # 去掉边框更清爽
-            bgcolor="rgba(255,255,255,0)" # 透明背景
+            # 将图例移到绘图区域外侧，防止遮挡
+            yanchor="top", y=1,
+            xanchor="left", x=1.02,
+            bordercolor="Black", borderwidth=0,
+            font=dict(size=12)
         ),
-        margin=dict(l=80, r=120, t=80, b=80) # 增加右边距(r)以容纳图例
+        # 增加右边距以容纳图例
+        margin=dict(l=80, r=120, t=80, b=80)
     )
     return fig
 
-# PLS-DA 椭圆辅助函数
+# PLS-DA 椭圆坐标计算
 def get_ellipse_coordinates(x, y, std_mult=2):
     if len(x) < 3: return None, None
     mean_x, mean_y = np.mean(x), np.mean(y)
@@ -97,7 +113,7 @@ def calculate_vips(model):
         vips[i] = np.sqrt(p * (s.T @ weight) / total_s)
     return vips
 
-# 统计分析逻辑
+# 统计分析 (Pairwise)
 @st.cache_data
 def run_pairwise_statistics(df, group_col, case, control, features):
     g1 = df[df[group_col] == case]
@@ -105,7 +121,7 @@ def run_pairwise_statistics(df, group_col, case, control, features):
     res = []
     for f in features:
         v1, v2 = g1[f].values, g2[f].values
-        fc = np.mean(v1) - np.mean(v2)
+        fc = np.mean(v1) - np.mean(v2) # Log scale subtraction = division
         try: t, p = stats.ttest_ind(v1, v2, equal_var=False)
         except: p = 1.0
         res.append({'Metabolite': f, 'Log2_FC': fc, 'P_Value': p})
@@ -121,68 +137,79 @@ def run_pairwise_statistics(df, group_col, case, control, features):
     return res_df
 
 # ==========================================
-# 2. 侧边栏
+# 2. 侧边栏控制面板
 # ==========================================
 with st.sidebar:
-    st.header("🛠️ 设置面板")
-    uploaded_file = st.file_uploader("1. 上传 CSV 数据", type=["csv"])
+    st.header("🛠️ 分析控制台")
+    uploaded_file = st.file_uploader("1. 上传数据 (CSV)", type=["csv"])
     
     if not uploaded_file:
-        st.info("请上传数据以开始。")
+        st.info("👋 请先上传 CSV 数据文件。")
         st.stop()
         
     raw_df = pd.read_csv(uploaded_file)
     non_num = raw_df.select_dtypes(exclude=[np.number]).columns.tolist()
     
-    if not non_num: st.error("错误：未找到分组列"); st.stop()
-    group_col = st.selectbox("2. 分组列", non_num)
+    if not non_num: st.error("❌ 数据中没有找到分组列 (字符串列)"); st.stop()
+    group_col = st.selectbox("2. 选择分组列", non_num)
     
-    all_groups = sorted(raw_df[group_col].unique())
-    
-    st.markdown("### 3. 选择分析组别")
-    selected_groups = st.multiselect(
-        "选择要包含在分析中的组 (至少2个):",
-        all_groups,
-        default=all_groups[:2] if len(all_groups) >= 2 else all_groups
-    )
-    
-    if len(selected_groups) < 2:
-        st.error("请至少选择两个组进行分析。")
-        st.stop()
+    # --- 高级预处理选项 ---
+    with st.expander("⚙️ 数据清洗与标准化 (高级)", expanded=False):
+        st.markdown("**1. 缺失值处理**")
+        miss_th = st.slider("剔除缺失率 > X 的特征", 0.0, 1.0, 0.5, 0.1)
+        impute_m = st.selectbox("填充方法", ["min", "mean", "median", "zero"], index=0, help="'min': 填充为最小值的1/2 (推荐)")
         
+        st.markdown("**2. 样本归一化 (Normalization)**")
+        norm_m = st.selectbox("方法", ["None", "Sum", "Median"], index=0, help="Sum/Median 可消除尿液/血清样本的浓度稀释差异。")
+        
+        st.markdown("**3. 数据转化 & 缩放**")
+        do_log = st.checkbox("Log2 转化", value=True, help="使数据服从正态分布 (推荐)")
+        scale_m = st.selectbox("特征缩放 (Scaling)", ["None", "Auto", "Pareto"], index=0, help="Auto: Mean=0, Std=1; Pareto: 适用于代谢组学")
+
+    # --- 组别选择 ---
+    all_groups = sorted(raw_df[group_col].unique())
     st.divider()
+    st.markdown("### 3. 组别筛选")
+    selected_groups = st.multiselect("选择纳入分析的组 (全局概览):", all_groups, default=all_groups[:2] if len(all_groups) >= 2 else all_groups)
     
-    st.markdown("### 4. 差异比较设置 (火山图)")
+    if len(selected_groups) < 2: st.error("至少选择 2 个组。"); st.stop()
+    
+    # --- 差异对比 ---
+    st.markdown("### 4. 差异对比 (火山图)")
     c1, c2 = st.columns(2)
-    # 过滤出已选中的组供选择
     valid_groups = [g for g in selected_groups]
     case_grp = c1.selectbox("Exp (Case)", valid_groups, index=0)
-    # 智能默认值
-    default_ctrl_idx = 1 if len(valid_groups) > 1 else 0
-    ctrl_grp = c2.selectbox("Ctrl (Ref)", valid_groups, index=default_ctrl_idx)
+    ctrl_grp = c2.selectbox("Ctrl (Ref)", valid_groups, index=1 if len(valid_groups)>1 else 0)
     
-    if case_grp == ctrl_grp:
-        st.warning("⚠️ Case 和 Control 相同。")
+    if case_grp == ctrl_grp: st.warning("⚠️ Case 和 Control 相同")
 
     st.divider()
-    st.subheader("5. 统计阈值")
-    p_th = st.number_input("P-value", 0.05, format="%.3f")
-    fc_th = st.number_input("Log2 FC", 1.0)
-    
-    # 新增：控制抖动 (Jitter)
-    st.divider()
-    st.markdown("### 6. 图表微调")
-    enable_jitter = st.checkbox("开启火山图抖动 (Jitter)", value=True, help="如果火山图呈现奇怪的线条状，请开启此选项以分散点。")
+    st.subheader("5. 绘图参数")
+    p_th = st.number_input("P-value 阈值", 0.05, format="%.3f")
+    fc_th = st.number_input("Log2 FC 阈值", 1.0)
+    enable_jitter = st.checkbox("火山图抖动 (Jitter)", value=True, help="分散重叠点，使分布更自然")
 
 # ==========================================
-# 3. 主逻辑
+# 3. 数据处理 (Pipeline)
 # ==========================================
-df_proc, feats = data_cleaning_pipeline(raw_df, group_col, impute_na=True, log_transform=True)
+
+# 调用外部模块进行清洗
+df_proc, feats = data_cleaning_pipeline(
+    raw_df, group_col, 
+    missing_thresh=miss_th, 
+    impute_method=impute_m, 
+    norm_method=norm_m, 
+    log_transform=do_log, 
+    scale_method=scale_m
+)
+
+# 仅保留用户勾选的组
 df_sub = df_proc[df_proc[group_col].isin(selected_groups)].copy()
 
+# 执行差异分析 (仅针对 Case vs Control)
 if case_grp != ctrl_grp:
     res_stats = run_pairwise_statistics(df_sub, group_col, case_grp, ctrl_grp, feats)
-    
+    # 标记
     res_stats['Sig'] = 'NS'
     res_stats.loc[(res_stats['P_Value'] < p_th) & (res_stats['Log2_FC'] > fc_th), 'Sig'] = 'Up'
     res_stats.loc[(res_stats['P_Value'] < p_th) & (res_stats['Log2_FC'] < -fc_th), 'Sig'] = 'Down'
@@ -194,9 +221,8 @@ else:
 # ==========================================
 # 4. 结果展示
 # ==========================================
-st.title("📊 代谢组学分析报告")
-st.markdown(f"**当前概览组别**: {', '.join(selected_groups)}")
-st.markdown(f"**当前差异对比**: `{case_grp}` vs `{ctrl_grp}`")
+st.title("📊 代谢组学分析报告 (Metabolomics Pro)")
+st.caption(f"当前样本总数: {len(df_sub)} | 特征数: {len(feats)} | 对比: {case_grp} vs {ctrl_grp}")
 
 tabs = st.tabs(["📊 PCA", "🎯 PLS-DA", "⭐ VIP 特征", "🌋 火山图", "🔥 热图", "📑 详情"])
 
@@ -204,8 +230,9 @@ tabs = st.tabs(["📊 PCA", "🎯 PLS-DA", "⭐ VIP 特征", "🌋 火山图", "
 with tabs[0]:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if len(df_sub) < 3: st.warning("样本量过少，无法进行 PCA。")
+        if len(df_sub) < 3: st.warning("样本不足，无法计算 PCA")
         else:
+            # 无论前面是否 Scaling，PCA前通常再次做 StandardScaler 以确保可视化正常
             X = StandardScaler().fit_transform(df_sub[feats])
             pca = PCA(n_components=2).fit(X)
             pcs = pca.transform(X)
@@ -221,7 +248,7 @@ with tabs[0]:
 with tabs[1]:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if len(df_sub) < 3: st.warning("样本量过少。")
+        if len(df_sub) < 3: st.warning("样本不足")
         else:
             X_pls = StandardScaler().fit_transform(df_sub[feats])
             y_labels = pd.factorize(df_sub[group_col])[0]
@@ -232,6 +259,7 @@ with tabs[1]:
             fig_pls = px.scatter(plot_df, x='C1', y='C2', color='Group', symbol='Group',
                                  color_discrete_sequence=GROUP_COLORS, width=600, height=600)
             
+            # 画置信椭圆
             for i, grp in enumerate(selected_groups):
                 sub_g = plot_df[plot_df['Group'] == grp]
                 if len(sub_g) >= 3:
@@ -240,11 +268,11 @@ with tabs[1]:
                         color = GROUP_COLORS[i % len(GROUP_COLORS)]
                         fig_pls.add_trace(go.Scatter(x=ell_x, y=ell_y, mode='lines', line=dict(color=color, width=2, dash='dash'), showlegend=False, hoverinfo='skip'))
             
-            fig_pls.update_traces(marker=dict(size=15, line=dict(width=1.5, color='black'), opacity=1.0))
+            fig_pls.update_traces(marker=dict(size=14, line=dict(width=1.5, color='black'), opacity=1.0))
             update_layout_square(fig_pls, "PLS-DA Score Plot", "Component 1", "Component 2")
             st.plotly_chart(fig_pls, use_container_width=False)
 
-# --- Tab 3: VIP ---
+# --- Tab 3: VIP Scores (独立优化版) ---
 with tabs[2]:
     st.markdown("### Top 25 VIP Features")
     if 'pls_model' in locals():
@@ -252,57 +280,47 @@ with tabs[2]:
         vip_df = pd.DataFrame({'Metabolite': feats, 'VIP': vip_scores})
         top_vip = vip_df.sort_values('VIP', ascending=True).tail(25)
         
-        col1, col2, col3 = st.columns([1, 3, 1])
-        with col2:
+        # 使用宽布局
+        c1, c2, c3 = st.columns([1, 6, 1])
+        with c2:
             fig_vip = px.bar(top_vip, x="VIP", y="Metabolite", orientation='h',
                              color="VIP", color_continuous_scale="RdBu_r", width=800, height=700)
+            
             fig_vip.add_vline(x=1.0, line_dash="dash", line_color="black")
             fig_vip.update_traces(marker_line_color='black', marker_line_width=1.0)
             
-            # 使用 update_layout 手动调整，不强制正方形
+            # 这里的 Margin.l = 200 是为了防止左侧长名称被切掉
             fig_vip.update_layout(
                 template="simple_white", width=800, height=700,
-                title={'text': "VIP Scores", 'x':0.5, 'xanchor': 'center', 'font': dict(size=20, family="Arial, bold")},
+                title={'text': "VIP Scores (PLS-DA)", 'x':0.5, 'xanchor': 'center', 'font': dict(size=20, family="Arial, bold")},
                 xaxis=dict(title="VIP Score", showline=True, mirror=True, linewidth=2, linecolor='black'),
-                yaxis=dict(title="", showline=True, mirror=True, linewidth=2, linecolor='black', automargin=True),
+                yaxis=dict(title="", showline=True, mirror=True, linewidth=2, linecolor='black'),
                 coloraxis_showscale=False,
-                margin=dict(l=200, r=40, t=80, b=80) 
+                margin=dict(l=200, r=40, t=60, b=60) 
             )
             st.plotly_chart(fig_vip, use_container_width=False)
 
-# --- Tab 4: 火山图 (修复曲线问题) ---
+# --- Tab 4: 火山图 (带 Jitter) ---
 with tabs[3]:
-    if case_grp == ctrl_grp:
-        st.warning("⚠️ 请选择不同的组。")
+    if case_grp == ctrl_grp: st.warning("请选择不同的对比组")
     else:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            # 准备绘图数据
             plot_df = res_stats.copy()
+            x_col, y_col = "Log2_FC", "-Log10_P"
             
-            x_col = "Log2_FC"
-            y_col = "-Log10_P"
-            
-            # --- 关键修复：加入随机抖动 (Jitter) ---
+            # 加入随机抖动 (Jitter) 以优化视觉
             if enable_jitter:
-                # 生成微小的随机噪音，比例为数据范围的 1%
-                np.random.seed(42) # 保证每次抖动一致
-                x_range = plot_df['Log2_FC'].max() - plot_df['Log2_FC'].min()
-                y_range = plot_df['-Log10_P'].max() - plot_df['-Log10_P'].min()
-                
-                # 如果范围为0 (所有值都一样)，给一个默认范围防止报错
-                if x_range == 0: x_range = 1
-                if y_range == 0: y_range = 1
-                
-                plot_df['Log2_FC_Jitter'] = plot_df['Log2_FC'] + np.random.normal(0, x_range*0.015, len(plot_df))
-                plot_df['-Log10_P_Jitter'] = plot_df['-Log10_P'] + np.random.normal(0, y_range*0.015, len(plot_df))
-                
-                x_col = "Log2_FC_Jitter"
-                y_col = "-Log10_P_Jitter"
+                np.random.seed(42)
+                x_range = plot_df[x_col].max() - plot_df[x_col].min() or 1
+                y_range = plot_df[y_col].max() - plot_df[y_col].min() or 1
+                plot_df['Log2_FC_J'] = plot_df[x_col] + np.random.normal(0, x_range*0.015, len(plot_df))
+                plot_df['-Log10_P_J'] = plot_df[y_col] + np.random.normal(0, y_range*0.015, len(plot_df))
+                x_col, y_col = "Log2_FC_J", "-Log10_P_J"
             
             fig_vol = px.scatter(plot_df, x=x_col, y=y_col, color="Sig",
                                  color_discrete_map=COLOR_PALETTE,
-                                 # 即使加了抖动，Hover依然显示真实的数值
+                                 # 悬停时显示代谢物名字和真实数值
                                  hover_data={"Metabolite":True, "Log2_FC":':.2f', "P_Value":':.2e', x_col:False, y_col:False},
                                  width=600, height=600)
             
@@ -310,19 +328,20 @@ with tabs[3]:
             fig_vol.add_vline(x=fc_th, line_dash="dash", line_color="black", opacity=0.8)
             fig_vol.add_vline(x=-fc_th, line_dash="dash", line_color="black", opacity=0.8)
             
-            fig_vol.update_traces(marker=dict(size=10, opacity=0.7, line=dict(width=1, color='black')))
+            fig_vol.update_traces(marker=dict(size=10, opacity=0.75, line=dict(width=1, color='black')))
             update_layout_square(fig_vol, f"Volcano: {case_grp} vs {ctrl_grp}", "Log2 Fold Change", "-Log10(P-value)")
             st.plotly_chart(fig_vol, use_container_width=False)
 
 # --- Tab 5: 热图 ---
 with tabs[4]:
-    if not sig_metabolites: st.warning("无显著差异物。")
+    if not sig_metabolites: st.info("当前对比组无显著差异物。")
     else:
         c1, c2, c3 = st.columns([1, 6, 1])
         with c2:
             top_n = 50
             top_feats = res_stats.sort_values('P_Value').head(top_n)['Metabolite'].tolist()
             hm_data = df_sub.set_index(group_col)[top_feats]
+            
             lut = {grp: GROUP_COLORS[i % len(GROUP_COLORS)] for i, grp in enumerate(df_sub[group_col].unique())}
             row_colors = df_sub[group_col].map(lut)
             
@@ -333,9 +352,9 @@ with tabs[4]:
                 g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xmajorticklabels(), rotation=45, ha="right", fontsize=10)
                 g.ax_heatmap.set_yticklabels([]); g.ax_heatmap.set_ylabel("Samples", fontsize=12)
                 st.pyplot(g.fig)
-            except Exception as e: st.error(f"Error: {e}")
+            except Exception as e: st.error(f"绘图错误: {e}")
 
-# --- Tab 6: 详情 ---
+# --- Tab 6: 详情 & 箱线图 ---
 with tabs[5]:
     c1, c2 = st.columns([1.5, 1])
     with c1:
@@ -348,14 +367,15 @@ with tabs[5]:
     with c2:
         st.subheader("箱线图")
         feat_options = sorted(feats)
-        default_ix = feat_options.index(sig_metabolites[0]) if sig_metabolites else 0
-        target_feat = st.selectbox("选择代谢物", feat_options, index=default_ix)
+        # 默认选中第一个显著物，如果没有显著物则选第一个
+        def_ix = feat_options.index(sig_metabolites[0]) if sig_metabolites else 0
+        target_feat = st.selectbox("选择代谢物", feat_options, index=def_ix)
         
         if target_feat:
             box_df = df_sub[[group_col, target_feat]].copy()
             fig_box = px.box(box_df, x=group_col, y=target_feat, color=group_col,
                              color_discrete_sequence=GROUP_COLORS, points="all", width=500, height=500)
+            # pointpos=0 居中显示散点
             fig_box.update_traces(marker=dict(size=8, opacity=0.7, line=dict(width=1, color='black')), jitter=0.5, pointpos=0)
             update_layout_square(fig_box, target_feat, "Group", "Log2 Intensity", width=500, height=500)
             st.plotly_chart(fig_box, use_container_width=False)
-
