@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from scipy import stats
 import plotly.express as px
-import plotly.graph_objects as go
 import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
@@ -12,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from statsmodels.stats.multitest import multipletests
 
 # ==========================================
-# 0. 全局配置与风格设置 (Publication Ready)
+# 0. 全局配置与发表级样式 (Publication Ready)
 # ==========================================
 st.set_page_config(page_title="MetaboAnalyst Pro", page_icon="🔬", layout="wide")
 
@@ -22,17 +21,19 @@ st.markdown("""
     .block-container {padding-top: 1rem; padding-bottom: 3rem;}
     h1, h2, h3 {font-family: 'Arial', sans-serif;}
     .stAlert {font-weight: bold;}
+    /* 调整 Tab 字体大小 */
+    button[data-baseweb="tab"] {font-size: 16px; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
 
-# 定义学术常用的配色方案 (MetaboAnalyst 风格: 红/绿 或 红/蓝)
+# 定义学术常用的配色方案
 COLOR_PALETTE = {
-    'Up': '#CD0000',      # 深红
-    'Down': '#008B00',    # 深绿 (或改为 '#00008B' 深蓝)
-    'NS': '#D3D3D3'       # 浅灰
+    'Up': '#CD0000',      # Firebrick Red
+    'Down': '#008B00',    # Dark Green (或用 #00008B 深蓝)
+    'NS': '#D3D3D3'       # Light Grey
 }
 
-# Plotly 统一模板函数：让所有交互图看起来像打印出来的文章插图
+# Plotly 统一模板函数：SCI 风格 (白底黑框)
 def update_layout_pub(fig, title="", x_title="", y_title=""):
     fig.update_layout(
         template="simple_white", # 纯白背景，无网格
@@ -42,67 +43,21 @@ def update_layout_pub(fig, title="", x_title="", y_title=""):
             'xanchor': 'center', 'yanchor': 'top',
             'font': dict(size=18, color='black', family="Arial, bold")
         },
-        xaxis=dict(title=x_title, showline=True, linewidth=1.5, linecolor='black', mirror=True),
-        yaxis=dict(title=y_title, showline=True, linewidth=1.5, linecolor='black', mirror=True),
+        xaxis=dict(title=x_title, showline=True, linewidth=1.5, linecolor='black', mirror=True, title_font=dict(size=16)),
+        yaxis=dict(title=y_title, showline=True, linewidth=1.5, linecolor='black', mirror=True, title_font=dict(size=16)),
         font=dict(family="Arial", size=14, color="black"),
-        width=800, height=600,
-        margin=dict(l=60, r=40, t=60, b=60)
+        width=700, height=550,
+        margin=dict(l=60, r=40, t=60, b=60),
+        legend=dict(
+            yanchor="top", y=0.99, xanchor="right", x=0.99,
+            bordercolor="Black", borderwidth=1
+        )
     )
     return fig
 
 # ==========================================
-# 1. 核心计算函数 (含通路数据库)
+# 1. 核心计算函数
 # ==========================================
-
-# --- 内置微型通路数据库 (仅作演示，真实分析需连接 KEGG API) ---
-PATHWAY_DB = {
-    "Glycolysis / Gluconeogenesis": ["Glucose", "Pyruvate", "Lactate", "Hexokinase", "Fructose-6P", "G3P"],
-    "Citrate Cycle (TCA cycle)": ["Citrate", "Succinate", "Fumarate", "Malate", "Oxaloacetate", "Pyruvate", "Acetyl-CoA"],
-    "Pyruvate Metabolism": ["Pyruvate", "Lactate", "Acetyl-CoA", "Acetate", "Acetaldehyde"],
-    "Alanine, Aspartate and Glutamate": ["Alanine", "Aspartate", "Glutamate", "Glutamine", "Pyruvate", "Oxaloacetate"],
-    "Glycerolipid Metabolism": ["Glycerol", "Triglyceride", "G3P", "Fatty Acid"],
-    "Fatty Acid Biosynthesis": ["Acetyl-CoA", "Malonyl-CoA", "Fatty Acid", "Pyruvate"]
-}
-
-@st.cache_data
-def run_pathway_analysis(significant_metabolites, all_metabolites_in_study):
-    """
-    执行简易的通路富集分析 (Fisher Exact Test / Hypergeometric Test)
-    """
-    results = []
-    # 简单的模糊匹配：只要列名里包含关键字就算匹配
-    sig_set = set([m.lower() for m in significant_metabolites])
-    bg_set = set([m.lower() for m in all_metabolites_in_study])
-    
-    for pathway_name, compounds in PATHWAY_DB.items():
-        path_set = set([c.lower() for c in compounds])
-        
-        # a: 既在通路里，又显著的 (Hit)
-        hits = sig_set.intersection(path_set)
-        a = len(hits)
-        
-        # b: 在通路里，但不显著
-        b = len(path_set) - a
-        
-        # c: 不在通路里，但显著
-        c = len(sig_set) - a
-        
-        # d: 既不在通路里，也不显著 (背景噪音)
-        # 估算总背景库大小，这里假设一个常见的人类代谢物库大小为 300
-        total_genome = 300 
-        d = total_genome - a - b - c
-        
-        if a > 0: # 只有命中的通路才计算
-            oddsratio, pvalue = stats.fisher_exact([[a, b], [c, d]], alternative='greater')
-            results.append({
-                'Pathway': pathway_name,
-                'Hits': a,
-                'P_Value': pvalue,
-                '-Log10_P': -np.log10(pvalue) if pvalue > 0 else 0,
-                'Impact': a / len(path_set) # 简易 Impact 计算
-            })
-            
-    return pd.DataFrame(results)
 
 @st.cache_data
 def preprocess_data(df, group_col, log_transform=True):
@@ -111,6 +66,7 @@ def preprocess_data(df, group_col, log_transform=True):
     meta_cols = [c for c in df.columns if c not in numeric_cols]
     
     data_df = df[numeric_cols].copy()
+    # 简单的缺失值填充 (最小值的一半)
     if data_df.isnull().sum().sum() > 0:
         data_df.fillna(data_df.min().min() * 0.5, inplace=True)
     if log_transform:
@@ -119,6 +75,7 @@ def preprocess_data(df, group_col, log_transform=True):
     return pd.concat([df[meta_cols], data_df], axis=1), numeric_cols
 
 def calculate_vips(model):
+    """计算 PLS-DA VIP 值"""
     t = model.x_scores_; w = model.x_weights_; q = model.y_loadings_
     p, h = w.shape; vips = np.zeros((p,))
     s = np.diag(t.T @ t @ q.T @ q).reshape(h, -1)
@@ -135,47 +92,61 @@ def run_statistics(df, group_col, case, control, features):
     res = []
     for f in features:
         v1, v2 = g1[f].values, g2[f].values
+        # Fold Change
         fc = np.mean(v1) - np.mean(v2)
+        # T-test
         try: t, p = stats.ttest_ind(v1, v2, equal_var=False)
         except: p = 1.0
         res.append({'Metabolite': f, 'Log2_FC': fc, 'P_Value': p})
     
     res_df = pd.DataFrame(res)
     res_df = res_df.dropna()
-    _, p_corr, _, _ = multipletests(res_df['P_Value'], method='fdr_bh')
-    res_df['FDR'] = p_corr
-    res_df['-Log10_P'] = -np.log10(res_df['P_Value'])
+    # FDR Correction
+    if not res_df.empty:
+        _, p_corr, _, _ = multipletests(res_df['P_Value'], method='fdr_bh')
+        res_df['FDR'] = p_corr
+        res_df['-Log10_P'] = -np.log10(res_df['P_Value'])
+    else:
+        res_df['FDR'] = 1.0; res_df['-Log10_P'] = 0
+        
     return res_df
 
 # ==========================================
-# 2. 界面逻辑
+# 2. 界面与主逻辑
 # ==========================================
 with st.sidebar:
     st.title("🧪 MetaboAnalyst Pro")
-    uploaded_file = st.file_uploader("上传 CSV 数据", type=["csv"])
+    st.markdown("---")
+    uploaded_file = st.file_uploader("1. 上传 CSV 数据", type=["csv"])
+    
     if not uploaded_file:
         st.info("请上传 CSV。格式：行(样本) x 列(代谢物)。需包含分组列。")
         st.stop()
         
     raw_df = pd.read_csv(uploaded_file)
     non_num = raw_df.select_dtypes(exclude=[np.number]).columns.tolist()
-    if not non_num: st.stop()
+    if not non_num: 
+        st.error("数据中缺少非数值的分组列！"); st.stop()
     
-    group_col = st.selectbox("分组列", non_num)
+    group_col = st.selectbox("2. 选择分组列", non_num)
     grps = raw_df[group_col].unique()
-    if len(grps) < 2: st.stop()
+    if len(grps) < 2: 
+        st.error("分组数量少于2个！"); st.stop()
     
-    case = st.selectbox("Case (Exp)", grps, index=0)
-    ctrl = st.selectbox("Control", grps, index=1)
+    c1, c2 = st.columns(2)
+    case = c1.selectbox("Case (Exp)", grps, index=0)
+    ctrl = c2.selectbox("Control", grps, index=min(1, len(grps)-1))
     
-    st.divider()
-    st.markdown("### ⚙️ 统计参数")
+    st.markdown("---")
+    st.markdown("### ⚙️ 统计阈值")
     p_th = st.number_input("P-value Cutoff", 0.05, format="%.3f")
     fc_th = st.number_input("Log2 FC Cutoff", 1.0)
     
-# 数据处理
+# --- 数据处理流程 ---
 df_proc, feats = preprocess_data(raw_df, group_col)
+# 筛选两组数据
 df_sub = df_proc[df_proc[group_col].isin([case, ctrl])].copy()
+# 运行统计
 res_stats = run_statistics(df_sub, group_col, case, ctrl, feats)
 
 # 标记显著性
@@ -183,138 +154,145 @@ res_stats['Sig'] = 'NS'
 res_stats.loc[(res_stats['P_Value'] < p_th) & (res_stats['Log2_FC'] > fc_th), 'Sig'] = 'Up'
 res_stats.loc[(res_stats['P_Value'] < p_th) & (res_stats['Log2_FC'] < -fc_th), 'Sig'] = 'Down'
 
-# 提取显著特征列表
+# 提取显著特征
 sig_metabolites = res_stats[res_stats['Sig'] != 'NS']['Metabolite'].tolist()
 
 # ==========================================
-# 3. 结果展示 (五大模块)
+# 3. 结果展示 Tab 页
 # ==========================================
 st.header(f"📊 分析报告: {case} vs {ctrl}")
-tabs = st.tabs(["PCA / PLS-DA", "🌋 火山图", "🔥 聚类热图", "🧬 通路富集", "📑 数据表"])
+st.markdown(f"**显著差异代谢物数量**: `{len(sig_metabolites)}` (Up: `{len(res_stats[res_stats['Sig']=='Up'])}`, Down: `{len(res_stats[res_stats['Sig']=='Down'])}`)")
 
-# --- Tab 1: 多变量分析 (PCA & PLS-DA) ---
-with tabs[0]:
+tab1, tab2, tab3, tab4 = st.tabs(["📊 多变量分析 (PCA/PLS)", "🌋 差异火山图", "🔥 聚类热图", "📑 详细结果与箱线图"])
+
+# --- Tab 1: PCA & PLS-DA ---
+with tab1:
     col1, col2 = st.columns(2)
+    # 准备数据矩阵 (标准化)
     X = StandardScaler().fit_transform(df_sub[feats])
     
-    # PCA
+    # 1. PCA Plot
     with col1:
         pca = PCA(n_components=2).fit(X)
         pcs = pca.transform(X)
         var = pca.explained_variance_ratio_
+        
         fig_pca = px.scatter(x=pcs[:,0], y=pcs[:,1], color=df_sub[group_col],
                              width=600, height=500)
-        # 手动美化点的大小和边框
-        fig_pca.update_traces(marker=dict(size=12, line=dict(width=1, color='black')))
+        fig_pca.update_traces(marker=dict(size=14, line=dict(width=1, color='black')))
         update_layout_pub(fig_pca, "PCA Score Plot", f"PC1 ({var[0]:.1%})", f"PC2 ({var[1]:.1%})")
         st.plotly_chart(fig_pca, use_container_width=True)
 
-    # PLS-DA
+    # 2. PLS-DA Plot
     with col2:
         pls = PLSRegression(n_components=2).fit(X, pd.factorize(df_sub[group_col])[0])
         pls_scores = pls.x_scores_
+        
         fig_pls = px.scatter(x=pls_scores[:,0], y=pls_scores[:,1], color=df_sub[group_col],
                              width=600, height=500)
-        fig_pls.update_traces(marker=dict(size=12, line=dict(width=1, color='black')))
+        fig_pls.update_traces(marker=dict(size=14, symbol='diamond', line=dict(width=1, color='black')))
         update_layout_pub(fig_pls, "PLS-DA Score Plot", "Component 1", "Component 2")
         st.plotly_chart(fig_pls, use_container_width=True)
+        
+    st.info("💡 提示：将鼠标悬停在图表右上角，点击相机图标即可下载高清图片。")
 
-# --- Tab 2: 火山图 (MetaboAnalyst Style) ---
-with tabs[1]:
-    # 颜色映射
-    color_map = {
-        'Up': COLOR_PALETTE['Up'], 
-        'Down': COLOR_PALETTE['Down'], 
-        'NS': COLOR_PALETTE['NS']
-    }
+# --- Tab 2: 火山图 ---
+with tab2:
+    color_map = {'Up': COLOR_PALETTE['Up'], 'Down': COLOR_PALETTE['Down'], 'NS': COLOR_PALETTE['NS']}
     
     fig_vol = px.scatter(res_stats, x="Log2_FC", y="-Log10_P", color="Sig",
                          color_discrete_map=color_map,
-                         hover_data=["Metabolite", "P_Value"],
+                         hover_data=["Metabolite", "P_Value", "FDR"],
                          width=800, height=600)
     
-    # 增加阈值线
-    fig_vol.add_hline(y=-np.log10(p_th), line_dash="dash", line_color="black", opacity=0.5)
-    fig_vol.add_vline(x=fc_th, line_dash="dash", line_color="black", opacity=0.5)
-    fig_vol.add_vline(x=-fc_th, line_dash="dash", line_color="black", opacity=0.5)
+    # 阈值辅助线
+    fig_vol.add_hline(y=-np.log10(p_th), line_dash="dash", line_color="black", opacity=0.6)
+    fig_vol.add_vline(x=fc_th, line_dash="dash", line_color="black", opacity=0.6)
+    fig_vol.add_vline(x=-fc_th, line_dash="dash", line_color="black", opacity=0.6)
     
-    # 样式调整
     fig_vol.update_traces(marker=dict(size=10, opacity=0.8, line=dict(width=1, color='black')))
     update_layout_pub(fig_vol, "Volcano Plot", "Log2 Fold Change", "-Log10(P-value)")
     
-    st.plotly_chart(fig_vol, use_container_width=True)
-    st.caption("提示：鼠标悬停右上角相机图标可下载 SVG/PNG 矢量图用于发表。")
+    col_v1, col_v2 = st.columns([3, 1])
+    with col_v1:
+        st.plotly_chart(fig_vol, use_container_width=True)
+    with col_v2:
+        st.markdown("#### 图例说明")
+        st.markdown(f"🔴 **Up**: P < {p_th} & FC > {fc_th}")
+        st.markdown(f"🟢 **Down**: P < {p_th} & FC < -{fc_th}")
+        st.markdown("⚪ **NS**: Not Significant")
 
-# --- Tab 3: 聚类热图 (Seaborn Implementation) ---
-with tabs[2]:
-    st.subheader("Top 25 显著差异代谢物热图")
+# --- Tab 3: 聚类热图 ---
+with tab3:
+    st.subheader("Top 30 显著差异代谢物热图")
     
     if len(sig_metabolites) < 2:
-        st.warning("显著差异代谢物太少，无法绘制热图。请尝试放宽 P 值或 FC 阈值。")
+        st.warning(f"显著差异代谢物不足 2 个 (当前: {len(sig_metabolites)})，无法绘制聚类热图。请尝试调大 P-value 阈值。")
     else:
-        # 1. 准备数据：取前25个最显著的（按P值排序）
-        top_n = 25
+        # 取最显著的前30个
+        top_n = 30
         top_feats = res_stats.sort_values('P_Value').head(top_n)['Metabolite'].tolist()
-        
         hm_data = df_sub.set_index(group_col)[top_feats]
         
-        # 为了画图好看，我们在行（样本）上加颜色条来区分组别
-        # 创建一个颜色映射字典
+        # 颜色条
         lut = dict(zip(df_sub[group_col].unique(), "rbg"))
         row_colors = df_sub[group_col].map(lut)
         
-        # 2. 绘制 Seaborn Clustermap
-        # z_score=1 表示按列（代谢物）进行标准化，这是热图的标准做法
         try:
+            # 绘图
             g = sns.clustermap(hm_data.astype(float), 
-                               z_score=1, 
-                               cmap="vlag",  # 红-白-蓝 经典学术配色 (vlag or RdBu_r)
+                               z_score=1,  # 按列标准化
+                               cmap="vlag", # 蓝-白-红 学术配色
                                center=0, 
                                row_colors=row_colors,
-                               figsize=(10, 8),
-                               dendrogram_ratio=(.1, .2),
-                               cbar_pos=(.02, .32, .03, .2))
+                               figsize=(10, 10),
+                               dendrogram_ratio=(.15, .15),
+                               cbar_pos=(.02, .8, .03, .15)) # 调整 colorbar 位置
             
-            # 调整字体
-            plt.setp(g.ax_heatmap.get_xticklabels(), rotation=45, ha="right", fontsize=10)
-            plt.setp(g.ax_heatmap.get_yticklabels(), visible=False) # 隐藏样本名，防止太乱
+            g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xmajorticklabels(), rotation=45, ha="right", fontsize=9)
+            g.ax_heatmap.set_yticklabels([]) # 隐藏样本名称
+            g.ax_heatmap.set_ylabel("Samples", fontsize=12)
             
-            st.pyplot(g.fig) # 显示 Matplotlib 图
+            # 传递 Figure 对象给 Streamlit
+            st.pyplot(g.fig)
             
         except Exception as e:
-            st.error(f"绘图出错 (通常是因为数据量太小): {e}")
+            st.error(f"热图绘制失败 (数据可能含有太多 NaN 或 方差为 0): {e}")
 
-# --- Tab 4: 通路富集分析 (Pathway Analysis) ---
-with tabs[3]:
-    st.subheader("🧬 代谢通路富集 (演示版)")
+# --- Tab 4: 结果表 & 箱线图 ---
+with tab4:
+    col_d1, col_d2 = st.columns([1.5, 1])
     
-    # 运行通路分析
-    path_res = run_pathway_analysis(sig_metabolites, feats)
-    
-    if path_res.empty:
-        st.warning(f"未找到显著富集的通路。这可能是因为演示数据库较小，或者您的代谢物命名与数据库不匹配。\n\n**演示支持的代谢物名**: Glucose, Pyruvate, Lactate, Citrate, Alanine 等。")
-    else:
-        # 绘制气泡图 (Bubble Plot)
-        # X: Impact, Y: -Log10(P), Size: Hits, Color: P-value
-        fig_path = px.scatter(path_res, x="Impact", y="-Log10_P",
-                              size="Hits", color="P_Value",
-                              hover_name="Pathway",
-                              size_max=40,
-                              color_continuous_scale="Reds_r", # P值越小越红
-                              width=800, height=500)
+    with col_d1:
+        st.subheader("📑 统计结果表")
+        # 格式化表格
+        display_df = res_stats.sort_values("P_Value").copy()
+        st.dataframe(
+            display_df.style.format({
+                "Log2_FC": "{:.2f}", "P_Value": "{:.4f}", "FDR": "{:.4f}", "-Log10_P": "{:.2f}"
+            }).background_gradient(subset=['P_Value'], cmap="Reds_r", vmin=0, vmax=0.05),
+            use_container_width=True, height=500
+        )
+        # 下载
+        csv = display_df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 下载完整结果 (CSV)", csv, "metabo_results.csv", "text/csv")
         
-        update_layout_pub(fig_path, "Pathway Enrichment Analysis", "Pathway Impact", "-Log10(P-value)")
+    with col_d2:
+        st.subheader("📦 单个代谢物详情")
+        # 联动：选择代谢物
+        all_options = sorted(res_stats['Metabolite'].tolist())
+        # 默认选最显著的那个
+        default_idx = all_options.index(display_df.iloc[0]['Metabolite']) if not display_df.empty else 0
+        target_feat = st.selectbox("选择代谢物查看箱线图:", all_options, index=default_idx)
         
-        # 增加文本标签
-        fig_path.update_traces(textposition='top center')
-        
-        st.plotly_chart(fig_path, use_container_width=True)
-        
-        st.dataframe(path_res)
-        st.info("⚠️ 注意：此模块使用内置的小型演示数据库。进行正式发表分析时，请务必使用完整的 KEGG 或 SMPDB 数据库。")
+        if target_feat:
+            # 绘制箱线图
+            box_df = df_sub[[group_col, target_feat]].copy()
+            fig_box = px.box(box_df, x=group_col, y=target_feat, color=group_col,
+                             points="all", # 显示所有散点
+                             width=400, height=450)
+            
+            fig_box.update_traces(marker=dict(size=6, opacity=0.7))
+            update_layout_pub(fig_box, f"{target_feat}", "Group", "Log2 Intensity")
+            st.plotly_chart(fig_box, use_container_width=True)
 
-# --- Tab 5: 数据下载 ---
-with tabs[4]:
-    st.subheader("📥 导出分析结果")
-    csv = res_stats.to_csv(index=False).encode('utf-8')
-    st.download_button("下载统计结果 (CSV)", csv, "results.csv", "text/csv")
