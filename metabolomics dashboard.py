@@ -194,7 +194,7 @@ else:
 # ==========================================
 # 4. 结果展示
 # ==========================================
-st.title("📊 多组代谢组学分析报告")
+st.title("📊 代谢组学分析报告")
 st.markdown(f"**当前概览组别**: {', '.join(selected_groups)}")
 st.markdown(f"**当前差异对比**: `{case_grp}` vs `{ctrl_grp}`")
 
@@ -358,3 +358,4 @@ with tabs[5]:
             fig_box.update_traces(marker=dict(size=8, opacity=0.7, line=dict(width=1, color='black')), jitter=0.5, pointpos=0)
             update_layout_square(fig_box, target_feat, "Group", "Log2 Intensity", width=500, height=500)
             st.plotly_chart(fig_box, use_container_width=False)
+
