@@ -34,22 +34,21 @@ COLOR_PALETTE = {
 }
 
 # Plotly 统一模板函数：SCI 风格 (白底黑框)
-def update_layout_pub(fig, title="", x_title="", y_title=""):
+def update_layout_pub(fig, title="", x_title="", y_title="", width=700, height=550):
     fig.update_layout(
         template="simple_white", # 纯白背景，无网格
         title={
             'text': title,
-            'y':0.95, 'x':0.5,
+            'y':0.98, 'x':0.5,
             'xanchor': 'center', 'yanchor': 'top',
             'font': dict(size=18, color='black', family="Arial, bold")
         },
         xaxis=dict(title=x_title, showline=True, linewidth=1.5, linecolor='black', mirror=True, title_font=dict(size=16)),
-        yaxis=dict(title=y_title, showline=True, linewidth=1.5, linecolor='black', mirror=True, title_font=dict(size=16)),
+        yaxis=dict(title=y_title, showline=True, linewidth=1.5, linecolor='black', mirror=True, title_font=dict(size=16), automargin=True),
         font=dict(family="Arial", size=14, color="black"),
-        width=700, height=550,
-        margin=dict(l=60, r=40, t=60, b=60),
+        width=width, height=height,
+        margin=dict(l=80, r=40, t=60, b=60),
         legend=dict(
-            yanchor="top", y=0.99, xanchor="right", x=0.99,
             bordercolor="Black", borderwidth=1
         )
     )
@@ -74,6 +73,7 @@ def preprocess_data(df, group_col, log_transform=True):
         
     return pd.concat([df[meta_cols], data_df], axis=1), numeric_cols
 
+# ❌ 注意：此函数不能加 @st.cache_data，否则会报错
 def calculate_vips(model):
     """计算 PLS-DA VIP 值"""
     t = model.x_scores_; w = model.x_weights_; q = model.y_loadings_
@@ -163,7 +163,7 @@ sig_metabolites = res_stats[res_stats['Sig'] != 'NS']['Metabolite'].tolist()
 st.header(f"📊 分析报告: {case} vs {ctrl}")
 st.markdown(f"**显著差异代谢物数量**: `{len(sig_metabolites)}` (Up: `{len(res_stats[res_stats['Sig']=='Up'])}`, Down: `{len(res_stats[res_stats['Sig']=='Down'])}`)")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 多变量分析 (PCA/PLS)", "🌋 差异火山图", "🔥 聚类热图", "📑 详细结果与箱线图"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 多变量分析 (PCA/PLS-DA)", "🌋 差异火山图", "🔥 聚类热图", "📑 详细结果与箱线图"])
 
 # --- Tab 1: PCA & PLS-DA ---
 with tab1:
@@ -171,30 +171,60 @@ with tab1:
     # 准备数据矩阵 (标准化)
     X = StandardScaler().fit_transform(df_sub[feats])
     
-    # 1. PCA Plot
+    # 1. PCA Plot (左侧)
     with col1:
+        st.subheader("PCA Score Plot")
         pca = PCA(n_components=2).fit(X)
         pcs = pca.transform(X)
         var = pca.explained_variance_ratio_
         
-        fig_pca = px.scatter(x=pcs[:,0], y=pcs[:,1], color=df_sub[group_col],
-                             width=600, height=500)
-        fig_pca.update_traces(marker=dict(size=14, line=dict(width=1, color='black')))
-        update_layout_pub(fig_pca, "PCA Score Plot", f"PC1 ({var[0]:.1%})", f"PC2 ({var[1]:.1%})")
+        fig_pca = px.scatter(x=pcs[:,0], y=pcs[:,1], color=df_sub[group_col], width=600, height=500)
+        fig_pca.update_traces(marker=dict(size=14, line=dict(width=1, color='black'), opacity=0.8))
+        update_layout_pub(fig_pca, "", f"PC1 ({var[0]:.1%})", f"PC2 ({var[1]:.1%})")
         st.plotly_chart(fig_pca, use_container_width=True)
+        st.caption("PCA 显示样本的自然聚类情况 (无监督)。")
 
-    # 2. PLS-DA Plot
+    # 2. PLS-DA & VIP Plot (右侧)
     with col2:
-        pls = PLSRegression(n_components=2).fit(X, pd.factorize(df_sub[group_col])[0])
-        pls_scores = pls.x_scores_
+        st.subheader("PLS-DA Score Plot")
+        pls_model = PLSRegression(n_components=2)
+        pls_model.fit(X, pd.factorize(df_sub[group_col])[0])
+        pls_scores = pls_model.x_scores_
         
-        fig_pls = px.scatter(x=pls_scores[:,0], y=pls_scores[:,1], color=df_sub[group_col],
-                             width=600, height=500)
-        fig_pls.update_traces(marker=dict(size=14, symbol='diamond', line=dict(width=1, color='black')))
-        update_layout_pub(fig_pls, "PLS-DA Score Plot", "Component 1", "Component 2")
+        fig_pls = px.scatter(x=pls_scores[:,0], y=pls_scores[:,1], color=df_sub[group_col], width=600, height=500)
+        fig_pls.update_traces(marker=dict(size=14, symbol='diamond', line=dict(width=1, color='black'), opacity=0.8))
+        update_layout_pub(fig_pls, "", "Component 1", "Component 2")
         st.plotly_chart(fig_pls, use_container_width=True)
         
-    st.info("💡 提示：将鼠标悬停在图表右上角，点击相机图标即可下载高清图片。")
+        st.divider()
+        
+        # --- VIP 气泡图 ---
+        st.subheader("Top 30 VIP Scores (Bubble Plot)")
+        # 计算 VIP
+        vip_scores = calculate_vips(pls_model)
+        vip_df = pd.DataFrame({'Metabolite': feats, 'VIP': vip_scores})
+        # 取前30个，并按 VIP 升序排列（方便画图时从下往上排）
+        top_vip_df = vip_df.sort_values('VIP', ascending=True).tail(30)
+        
+        # 绘制气泡图
+        fig_vip = px.scatter(top_vip_df, x="VIP", y="Metabolite",
+                             size="VIP", # 气泡大小由 VIP 决定
+                             color="VIP", # 颜色也由 VIP 决定
+                             color_continuous_scale="RdBu_r", # 冷暖色调
+                             size_max=25, # 最大气泡尺寸
+                             width=600, height=800) # 增加高度以容纳标签
+
+        # 添加 VIP=1 的辅助线
+        fig_vip.add_vline(x=1.0, line_dash="dash", line_color="gray", opacity=0.7, annotation_text="VIP=1.0")
+        
+        # 美化
+        fig_vip.update_traces(marker=dict(line=dict(width=1, color='black'), opacity=0.9))
+        update_layout_pub(fig_vip, "", "VIP Score", "", height=800)
+        # 确保 Y 轴分类顺序正确
+        fig_vip.update_yaxes(categoryorder='total ascending')
+        
+        st.plotly_chart(fig_vip, use_container_width=True)
+        st.caption("VIP > 1.0 通常被认为对组别区分有重要贡献。气泡越大/越红，VIP 值越高。")
 
 # --- Tab 2: 火山图 ---
 with tab2:
@@ -229,7 +259,7 @@ with tab3:
     if len(sig_metabolites) < 2:
         st.warning(f"显著差异代谢物不足 2 个 (当前: {len(sig_metabolites)})，无法绘制聚类热图。请尝试调大 P-value 阈值。")
     else:
-        # 取最显著的前30个
+        # 取最显著的前30个P值最小的
         top_n = 30
         top_feats = res_stats.sort_values('P_Value').head(top_n)['Metabolite'].tolist()
         hm_data = df_sub.set_index(group_col)[top_feats]
@@ -245,19 +275,18 @@ with tab3:
                                cmap="vlag", # 蓝-白-红 学术配色
                                center=0, 
                                row_colors=row_colors,
-                               figsize=(10, 10),
+                               figsize=(12, 12), # 增加尺寸防止标签重叠
                                dendrogram_ratio=(.15, .15),
-                               cbar_pos=(.02, .8, .03, .15)) # 调整 colorbar 位置
+                               cbar_pos=(.02, .8, .03, .12))
             
-            g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xmajorticklabels(), rotation=45, ha="right", fontsize=9)
+            g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xmajorticklabels(), rotation=45, ha="right", fontsize=10)
             g.ax_heatmap.set_yticklabels([]) # 隐藏样本名称
             g.ax_heatmap.set_ylabel("Samples", fontsize=12)
             
-            # 传递 Figure 对象给 Streamlit
             st.pyplot(g.fig)
             
         except Exception as e:
-            st.error(f"热图绘制失败 (数据可能含有太多 NaN 或 方差为 0): {e}")
+            st.error(f"热图绘制失败: {e}")
 
 # --- Tab 4: 结果表 & 箱线图 ---
 with tab4:
@@ -265,34 +294,27 @@ with tab4:
     
     with col_d1:
         st.subheader("📑 统计结果表")
-        # 格式化表格
         display_df = res_stats.sort_values("P_Value").copy()
         st.dataframe(
             display_df.style.format({
-                "Log2_FC": "{:.2f}", "P_Value": "{:.4f}", "FDR": "{:.4f}", "-Log10_P": "{:.2f}"
+                "Log2_FC": "{:.2f}", "P_Value": "{:.4e}", "FDR": "{:.4e}", "-Log10_P": "{:.2f}"
             }).background_gradient(subset=['P_Value'], cmap="Reds_r", vmin=0, vmax=0.05),
-            use_container_width=True, height=500
+            use_container_width=True, height=600
         )
-        # 下载
         csv = display_df.to_csv(index=False).encode('utf-8')
         st.download_button("📥 下载完整结果 (CSV)", csv, "metabo_results.csv", "text/csv")
         
     with col_d2:
         st.subheader("📦 单个代谢物详情")
-        # 联动：选择代谢物
         all_options = sorted(res_stats['Metabolite'].tolist())
-        # 默认选最显著的那个
         default_idx = all_options.index(display_df.iloc[0]['Metabolite']) if not display_df.empty else 0
         target_feat = st.selectbox("选择代谢物查看箱线图:", all_options, index=default_idx)
         
         if target_feat:
-            # 绘制箱线图
             box_df = df_sub[[group_col, target_feat]].copy()
             fig_box = px.box(box_df, x=group_col, y=target_feat, color=group_col,
-                             points="all", # 显示所有散点
-                             width=400, height=450)
+                             points="all", width=500, height=550)
             
-            fig_box.update_traces(marker=dict(size=6, opacity=0.7))
-            update_layout_pub(fig_box, f"{target_feat}", "Group", "Log2 Intensity")
+            fig_box.update_traces(marker=dict(size=7, opacity=0.7, line=dict(width=1, color='black')))
+            update_layout_pub(fig_box, f"{target_feat}", "Group", "Log2 Intensity", width=500, height=550)
             st.plotly_chart(fig_box, use_container_width=True)
-
