@@ -96,6 +96,7 @@ def preprocess_data(df, group_col, log_transform=True):
         data_df = np.log2(data_df + 1)
     return pd.concat([df[meta_cols], data_df], axis=1), numeric_cols
 
+# 注意：VIP计算不能加 cache，否则报错
 def calculate_vips(model):
     t = model.x_scores_; w = model.x_weights_; q = model.y_loadings_
     p, h = w.shape; vips = np.zeros((p,))
@@ -192,7 +193,9 @@ with tabs[0]:
         fig_pca = px.scatter(x=pcs[:,0], y=pcs[:,1], color=df_sub[group_col],
                              width=650, height=650) # 强制正方形
         fig_pca.update_traces(marker=dict(size=14, line=dict(width=1.5, color='black'), opacity=0.9))
-        update_layout_pub(fig_pca, "PCA Score Plot", f"PC1 ({var[0]:.1%})", f"PC2 ({var[1]:.1%})") # 调用美化函数
+        
+        # 修正：这里之前写错了名字，现在已改为 update_layout_square
+        update_layout_square(fig_pca, "PCA Score Plot", f"PC1 ({var[0]:.1%})", f"PC2 ({var[1]:.1%})") 
         
         # 关键：use_container_width=False 才能保持正方形
         st.plotly_chart(fig_pca, use_container_width=False) 
